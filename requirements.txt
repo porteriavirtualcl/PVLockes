@@ -1,0 +1,25 @@
+# Dependencias del proyecto "Portería Virtual"
+# Instalar en la Raspberry Pi con: pip install -r requirements.txt
+
+# --- Firebase ---
+firebase-admin>=6.5.0
+
+# --- Variables de entorno ---
+python-dotenv>=1.0.0
+
+# --- Generación de QR (para email de retiro) ---
+qrcode[pil]>=7.4.2
+
+# --- Generación de imagen del logo (redimensionar/transparencia) ---
+pillow>=10.0.0
+
+# --- GPIO (SOLO Raspberry Pi; en Windows/Mac se usa el mock automático) ---
+# Descomentar únicamente al desplegar en la Raspberry Pi:
+# RPi.GPIO>=0.7.1
+
+# --- Lector QR de retiro automático (SOLO Linux/Raspberry; en dev queda inactivo) ---
+# Descomentar solo si se usa el modo 'retiro_automatico' (lockers doble puerta):
+# evdev>=1.6.1
+
+# Nota: Tkinter viene incluido con Python estándar (no requiere pip).
+# En Raspberry Pi OS: sudo apt-get install python3-tk

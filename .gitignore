@@ -1,0 +1,33 @@
+# Credenciales y secretos
+.env
+secrets/
+*.json.key
+firebase-service-account.json
+
+# Base de datos local del kiosco (datos de operación, no versionar)
+*.db
+porteria_local.db
+
+# QR generados en runtime
+qr_generados/
+
+# Config local del entorno de agente/editor
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+logs/
+
+# SO / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

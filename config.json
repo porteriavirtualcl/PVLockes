@@ -1,0 +1,86 @@
+{
+  "_comentario_kiosk": "Identificador ÚNICO de este equipo. Debe coincidir con el doc 'kiosks/{kiosk_id}' administrado en la app de producción. El kiosco descarga desde ahí su configuración lógica (tipo, tamaños, orientación, etc.) y la combina con los pines locales.",
+  "kiosk_id": "kiosk-demo-01",
+
+  "sistema": {
+    "nombre": "Portería Virtual",
+    "version": "1.0.0",
+    "_comentario_fallback": "Estos valores lógicos son FALLBACK. Si hay config remota (kiosks/{kiosk_id}) cacheada, ella manda.",
+    "_comentario_tipo": "Tipos válidos: 'locker' (solo lockers), 'buzon' (solo buzón), 'mixto' (6 lockers + 1 buzón).",
+    "tipo": "mixto",
+    "_comentario_operacion": "'unidireccional' = 1 puerta por recurso (deposito y retiro por la misma). 'bidireccional' = 2 puertas (una para dejar, otra para retirar).",
+    "operacion_puertas": "bidireccional",
+    "_comentario_unidad": "Define la etiqueta que ve el repartidor. 'departamento' -> 'N° Depto'; 'casa' -> 'N° Casa'.",
+    "tipo_unidad": "departamento"
+  },
+
+  "_comentario_couriers": "FALLBACK offline. La lista real de couriers se administra en el BACKEND (Firestore 'config/courierCompanies', campo 'companies') desde la app de producción, y el kiosco la sincroniza y cachea. Esta lista local solo se usa si aún no hay sincronización.",
+  "couriers": [
+    "Blue Express",
+    "Correos de Chile",
+    "DHL",
+    "Falabella",
+    "Mercado Libre",
+    "Uber",
+    "Otro"
+  ],
+
+  "condominio": {
+    "_comentario": "El kiosco está físicamente instalado en UN condominio. Estos valores deben coincidir con el documento 'condos/{condo_id}' de la app de producción.",
+    "condo_id": "REEMPLAZAR_CON_ID_REAL",
+    "condo_name": "Condominio de Prueba"
+  },
+
+  "retiro_automatico": {
+    "_comentario": "Retiro SIN pantalla: un lector QR dedicado (ej. lado interior de lockers de doble puerta) abre la cerradura de retiro automáticamente al escanear un código vigente. Pensado para 'operacion_puertas' = 'bidireccional'. La pantalla exterior sigue funcionando de forma tradicional.",
+    "habilitado": false,
+    "_comentario_dispositivo": "Solo Linux/Raspberry. Ruta evdev del lector dedicado (se lee ese dispositivo directo, sin depender del foco de la pantalla). Ej: /dev/input/by-id/usb-XXXX_Scanner-event-kbd. Ver README para identificarlo.",
+    "dispositivo": ""
+  },
+
+  "sincronizacion": {
+    "_comentario": "Capa offline-first: los datos viven en SQLite local y se sincronizan con Firebase cuando hay internet.",
+    "db_local": "porteria_local.db",
+    "_comentario_intervalo": "Cada cuántos segundos el SyncService intenta empujar encomiendas pendientes y refrescar residentes.",
+    "intervalo_sync_seg": 60,
+    "_comentario_reintentos": "Máximo de reintentos de subida por encomienda antes de marcarla en 'error' (se seguirá reintentando en cada ciclo igualmente).",
+    "max_reintentos": 5
+  },
+
+  "pantalla": {
+    "_comentario": "Orientación de la GUI. 'vertical' (480x800, recomendado para pantalla de 7\") u 'horizontal' (800x480).",
+    "orientacion": "vertical",
+    "_comentario_fs": "Pantalla completa: true en el kiosco (Raspberry); false para desarrollar en ventana.",
+    "pantalla_completa": false
+  },
+
+  "gpio": {
+    "_comentario": "Modo de numeración de pines. 'BCM' usa la numeración lógica de Broadcom; 'BOARD' usa la numeración física del header.",
+    "modo": "BCM",
+    "_comentario_rele": "Muchos módulos de relé son 'activos en bajo' (LOW = cerradura accionada). Ajustar según el hardware. true = activo en bajo.",
+    "rele_activo_en_bajo": true,
+    "_comentario_pulso": "Tiempo en segundos que el relé permanece accionado para liberar la cerradura electromagnética.",
+    "duracion_pulso_seg": 1.5
+  },
+
+  "recursos": {
+    "_comentario": "Cada recurso mapea sus cerraduras a pines GPIO. En 'unidireccional' solo se usa 'pin_deposito' (retiro usa el mismo pin). En 'bidireccional' se usan ambos pines.",
+
+    "lockers": [
+      { "id": "L1", "tamano": "mediana", "pin_deposito": 17, "pin_retiro": 18 },
+      { "id": "L2", "tamano": "mediana", "pin_deposito": 27, "pin_retiro": 22 },
+      { "id": "L3", "tamano": "grande",  "pin_deposito": 23, "pin_retiro": 24 },
+      { "id": "L4", "tamano": "grande",  "pin_deposito": 25, "pin_retiro": 5  },
+      { "id": "L5", "tamano": "mediana", "pin_deposito": 6,  "pin_retiro": 12 },
+      { "id": "L6", "tamano": "grande",  "pin_deposito": 13, "pin_retiro": 16 }
+    ],
+
+    "buzon": {
+      "_comentario": "El buzón especial SIEMPRE tiene 2 cerraduras físicas independientes, sin importar la modalidad: una para depósito (exterior) y otra para retiro (interior/residente).",
+      "id": "B1",
+      "tamano": "chica",
+      "pin_deposito": 20,
+      "pin_retiro": 21
+    }
+  }
+}
