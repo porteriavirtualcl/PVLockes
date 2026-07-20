@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from firebase_service import FirebaseService, FirebaseNoDisponibleError, _iso_a_datetime
+from firebase_service import FirebaseService, FirebaseNoDisponibleError
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +118,10 @@ class SyncService:
                     self.local.marcar_sincronizada(pid, remote_creado=True)
                 else:
                     # Ya existe: es una actualización (ej. retiro).
-                    campos = {
+                    self.firebase.actualizar_parcel(self.condo_id, pid, {
                         "status": enc.get("status", "pending"),
-                        "pickedUpAt": _iso_a_datetime(enc.get("picked_up_at")),
-                    }
-                    self.firebase.actualizar_parcel(self.condo_id, pid, campos)
+                        "picked_up_at": enc.get("picked_up_at"),
+                    })
                     self.local.marcar_sincronizada(pid, remote_creado=True)
             except FirebaseNoDisponibleError as e:
                 # Si se cayó la conexión a mitad de ciclo, no seguir intentando.

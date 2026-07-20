@@ -143,19 +143,29 @@ class LocalStore:
         logger.info("Caché de residentes actualizada (%s registros).", len(residentes))
 
     def get_residentes_por_unidad(self, unit: str, solo_activos: bool = True) -> list:
-        """Residentes de una unidad (para la pantalla de selección de nombre)."""
-        q = "SELECT * FROM residentes WHERE unit = ?"
-        params = [str(unit)]
-        if solo_activos:
-            q += " AND status = 'Activo'"
-        q += " ORDER BY nombre"
+        """
+        Residentes de una unidad (para la pantalla de selección de nombre).
+
+        El repartidor escribe el número en el teclado; la unidad en Firestore
+        suele venir con prefijo (ej. 'Depto 801'), así que se compara por los
+        DÍGITOS ('801' == 'Depto 801'). Excluye solo los 'Inactivo' (los
+        'Pendiente' sí se muestran: viven ahí aunque no hayan activado la app).
+        """
+        typed = "".join(ch for ch in str(unit) if ch.isdigit())
         with self._lock:
-            filas = self._conn.execute(q, params).fetchall()
-        return [
-            {"uid": f["uid"], "nombre": f["nombre"], "email": f["email"],
-             "unit": f["unit"], "fcm_token": f["fcm_token"]}
-            for f in filas
-        ]
+            filas = self._conn.execute(
+                "SELECT * FROM residentes ORDER BY nombre"
+            ).fetchall()
+        out = []
+        for f in filas:
+            if solo_activos and (f["status"] or "") == "Inactivo":
+                continue
+            u = f["unit"] or ""
+            udig = "".join(ch for ch in u if ch.isdigit())
+            if u == str(unit) or (typed and udig == typed):
+                out.append({"uid": f["uid"], "nombre": f["nombre"], "email": f["email"],
+                            "unit": f["unit"], "fcm_token": f["fcm_token"]})
+        return out
 
     def contar_residentes(self) -> int:
         with self._lock:

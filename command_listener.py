@@ -1,75 +1,75 @@
 """
 command_listener.py
 --------------------
-Escucha en TIEMPO REAL comandos de apertura remota enviados por un operador
-desde la app de producción, en `kiosks/{kiosk_id}/commands`.
+Escucha comandos de apertura remota (operador desde la app) en
+`kiosks/{kiosk_id}/commands`, por POLLING sobre la API REST de Firestore.
+
+(Antes usaba on_snapshot de gRPC, pero gRPC se cuelga en la Raspberry Pi 3B;
+por eso se hace polling REST cada N segundos, tolerante a cortes de red.)
 
 Cada comando:
-    { accion: "abrir", lockerId: "L3", operacion: "retiro"|"deposito",
-      estado: "pendiente"|"ejecutado"|"error", ... }
+    { accion:"abrir", lockerId:"L3", operacion:"retiro"|"deposito",
+      estado:"pendiente"|"ejecutado"|"error", ... }
 
-El kiosco (Admin SDK) mantiene un listener de Firestore; al llegar un comando
-pendiente, ejecuta la apertura con su PIN LOCAL y actualiza el estado. Los pines
-nunca viajan por la red: el operador solo indica el id del locker.
-
-Si no hay conexión/credenciales (ej. desarrollo), queda inactivo sin romper nada.
+El kiosco ejecuta la apertura con su PIN LOCAL (los pines nunca viajan por red)
+y marca el estado del comando.
 """
 
 from __future__ import annotations
 
 import logging
+import datetime
+import threading
+
+from firebase_service import FirebaseNoDisponibleError
 
 logger = logging.getLogger(__name__)
 
 
 class CommandListener:
 
-    def __init__(self, firebase, kiosk_id: str, on_abrir):
+    def __init__(self, firebase, kiosk_id: str, on_abrir, intervalo_seg: int = 8):
         """
         Args:
-            firebase: instancia de FirebaseService (con .db y .conectado).
+            firebase: instancia de FirebaseService.
             kiosk_id: id de este equipo.
             on_abrir: callback (locker_id, operacion) -> (ok: bool, error: str).
+            intervalo_seg: cada cuánto revisa comandos pendientes.
         """
         self.firebase = firebase
         self.kiosk_id = kiosk_id
         self.on_abrir = on_abrir
-        self._watch = None
+        self.intervalo = intervalo_seg
+        self._stop = threading.Event()
+        self._hilo: threading.Thread | None = None
 
     # ------------------------------------------------------------------ #
     def iniciar(self) -> bool:
         if not self.kiosk_id or self.firebase is None or not self.firebase.conectado:
             logger.info("Apertura remota inactiva (sin conexión o sin kiosk_id).")
             return False
-        try:
-            from firebase_admin import firestore
-            col = (
-                self.firebase.db.collection("kiosks").document(self.kiosk_id)
-                .collection("commands")
-                .where(filter=firestore.FieldFilter("estado", "==", "pendiente"))
-            )
-            self._watch = col.on_snapshot(self._on_snapshot)
-            logger.info("Apertura remota ACTIVA (escuchando comandos de %s).", self.kiosk_id)
-            return True
-        except Exception as e:  # noqa: BLE001
-            logger.error("No se pudo iniciar el listener de comandos: %s", e)
-            return False
+        self._stop.clear()
+        self._hilo = threading.Thread(target=self._loop, name="CommandListener", daemon=True)
+        self._hilo.start()
+        logger.info("Apertura remota ACTIVA (polling cada %ss) para %s.",
+                    self.intervalo, self.kiosk_id)
+        return True
 
-    # ------------------------------------------------------------------ #
-    def _on_snapshot(self, col_snapshot, changes, read_time):
-        # Corre en un hilo del SDK de Firestore.
-        for change in changes:
-            if change.type.name != "ADDED":
-                continue
-            self._procesar(change.document)
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                for c in self.firebase.obtener_comandos_pendientes(self.kiosk_id):
+                    self._procesar(c)
+            except FirebaseNoDisponibleError:
+                pass  # sin conexión; se reintenta en el próximo ciclo
+            except Exception as e:  # noqa: BLE001 - el hilo nunca debe morir
+                logger.error("Error en polling de comandos: %s", e)
+            self._stop.wait(self.intervalo)
 
-    def _procesar(self, doc):
-        data = doc.to_dict() or {}
-        if data.get("estado") != "pendiente":
-            return
-
-        locker_id = data.get("lockerId")
-        operacion = data.get("operacion", "retiro")
+    def _procesar(self, c: dict):
+        cmd_id = c.get("id")
+        locker_id = c.get("lockerId")
+        operacion = c.get("operacion", "retiro")
         logger.info("Comando de apertura remota: locker=%s operacion=%s", locker_id, operacion)
 
         ok, error = False, ""
@@ -79,20 +79,15 @@ class CommandListener:
             ok, error = False, str(e)
 
         try:
-            from firebase_admin import firestore
-            doc.reference.update({
-                "estado": "ejecutado" if ok else "error",
-                "error": error or "",
-                "executedAt": firestore.SERVER_TIMESTAMP,
-            })
+            ahora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            self.firebase.actualizar_comando(
+                self.kiosk_id, cmd_id, "ejecutado" if ok else "error", error, ahora)
         except Exception as e:  # noqa: BLE001
-            logger.error("No se pudo actualizar el comando %s: %s", doc.id, e)
+            logger.error("No se pudo actualizar el comando %s: %s", cmd_id, e)
 
     # ------------------------------------------------------------------ #
     def detener(self):
-        if self._watch is not None:
-            try:
-                self._watch.unsubscribe()
-            except Exception:  # noqa: BLE001
-                pass
+        self._stop.set()
+        if self._hilo:
+            self._hilo.join(timeout=2)
         logger.info("Listener de comandos detenido.")
