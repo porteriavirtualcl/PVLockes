@@ -110,8 +110,13 @@ class PorteriaApp(tk.Tk):
         self.vertical = self.config_mgr.es_vertical
         self.title(self.config_mgr.nombre_sistema)
         self.configure(bg=COLOR_FONDO)
-        self.attributes("-fullscreen", self.config_mgr.pantalla_completa)
         self.geometry("480x800" if self.vertical else "800x480")
+        if self.config_mgr.pantalla_completa:
+            # Pantalla completa (kiosco). Se fija DESPUÉS del geometry y se
+            # refuerza tras el mapeo, porque compositores Wayland/labwc a veces
+            # ignoran el atributo si se establece demasiado temprano.
+            self.attributes("-fullscreen", True)
+            self.after(300, lambda: self.attributes("-fullscreen", True))
         self.bind("<Escape>", lambda e: self._salir())
         self.protocol("WM_DELETE_WINDOW", self._salir)
 
