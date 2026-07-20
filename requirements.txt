@@ -14,12 +14,14 @@ qrcode[pil]>=7.4.2
 pillow>=10.0.0
 
 # --- GPIO (SOLO Raspberry Pi; en Windows/Mac se usa el mock automático) ---
-# Descomentar únicamente al desplegar en la Raspberry Pi:
-# RPi.GPIO>=0.7.1
+# En Raspberry Pi OS Bookworm/Trixie NO usar el RPi.GPIO clásico. Instalar el
+# shim por apt (provee 'import RPi.GPIO' sobre lgpio):
+#     sudo apt install python3-rpi-lgpio
+# (crear el venv con --system-site-packages para que lo vea).
 
 # --- Lector QR de retiro automático (SOLO Linux/Raspberry; en dev queda inactivo) ---
-# Descomentar solo si se usa el modo 'retiro_automatico' (lockers doble puerta):
-# evdev>=1.6.1
+# Instalar por apt:  sudo apt install python3-evdev
+# (o pip install evdev si no se usa --system-site-packages)
 
 # Nota: Tkinter viene incluido con Python estándar (no requiere pip).
 # En Raspberry Pi OS: sudo apt-get install python3-tk
