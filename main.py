@@ -461,20 +461,45 @@ class PorteriaApp(tk.Tk):
         Devuelve: {"ok": bool, "motivo": "invalido"|"hardware", "recurso_id", "error"}
         No toca la GUI, por lo que es seguro llamarla desde el hilo del lector.
         """
+        codigo = (codigo or "").strip()
+
+        # 1) Encomiendas depositadas EN este kiosco (base local, offline-capable).
         entrega = self.local_store.get_encomienda_pendiente_por_id(codigo)
-        if entrega is None:
-            return {"ok": False, "motivo": "invalido"}
+        if entrega is not None:
+            recurso_id = entrega.get("locker_id")
+            try:
+                self.hardware.abrir_cerradura(recurso_id, "retiro")
+            except ValueError as e:
+                return {"ok": False, "motivo": "hardware", "error": str(e)}
+            self.local_store.marcar_retirada(entrega["parcel_id"])
+            self.allocator.refrescar_ocupacion()
+            self.sync.sincronizar_ahora()
+            return {"ok": True, "recurso_id": recurso_id}
 
-        recurso_id = entrega.get("locker_id")
-        try:
-            self.hardware.abrir_cerradura(recurso_id, "retiro")
-        except ValueError as e:
-            return {"ok": False, "motivo": "hardware", "error": str(e)}
+        # 2) Fallback: encomiendas creadas fuera del kiosco (app/operador) → Firestore.
+        if self.firebase is not None:
+            try:
+                p = self.firebase.obtener_parcel(self.config_mgr.condo_id, codigo)
+            except FirebaseNoDisponibleError:
+                p = None
+            if p and p.get("status") == "pending" and p.get("lockerId"):
+                recurso_id = p["lockerId"]
+                try:
+                    self.hardware.abrir_cerradura(recurso_id, "retiro")
+                except ValueError as e:
+                    return {"ok": False, "motivo": "hardware", "error": str(e)}
+                try:
+                    import datetime
+                    ahora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    self.firebase.actualizar_parcel(
+                        self.config_mgr.condo_id, codigo,
+                        {"status": "picked_up", "picked_up_at": ahora})
+                except FirebaseNoDisponibleError:
+                    logger.warning("Retiro: no se pudo marcar %s como retirada en Firebase.", codigo)
+                self.allocator.refrescar_ocupacion()
+                return {"ok": True, "recurso_id": recurso_id}
 
-        self.local_store.marcar_retirada(entrega["parcel_id"])
-        self.allocator.refrescar_ocupacion()
-        self.sync.sincronizar_ahora()
-        return {"ok": True, "recurso_id": recurso_id}
+        return {"ok": False, "motivo": "invalido"}
 
     def _procesar_retiro(self, codigo: str):
         """Retiro desde la PANTALLA exterior (Caso 1 y respaldo del Caso 2)."""

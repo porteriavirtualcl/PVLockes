@@ -269,6 +269,23 @@ class FirebaseService:
             raise FirebaseNoDisponibleError(f"crear_parcel {r.status_code}: {r.text[:200]}")
         logger.info("Parcel %s creado en Firebase (condo %s).", parcel_id, condo_id)
 
+    def obtener_parcel(self, condo_id: str, parcel_id: str) -> dict | None:
+        """
+        Lee una encomienda por su id (= valor del QR) desde
+        'condos/{condoId}/parcels/{parcel_id}'. Usado en el retiro para
+        encontrar encomiendas creadas fuera del kiosco (app/operador).
+
+        Returns: dict con los campos (status, lockerId, ...) o None si no existe.
+        """
+        if not parcel_id:
+            return None
+        r = self._get(f"condos/{condo_id}/parcels/{parcel_id}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise FirebaseNoDisponibleError(f"obtener_parcel {r.status_code}: {r.text[:200]}")
+        return _fields_to_dict(r.json().get("fields", {}))
+
     def actualizar_parcel(self, condo_id: str, parcel_id: str, campos: dict):
         """campos: {status, picked_up_at(ISO|None)}."""
         fields = {"status": _to_value(campos.get("status", "picked_up"))}
