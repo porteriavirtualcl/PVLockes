@@ -260,6 +260,15 @@ class ConfigManager:
     def retiro_auto_dispositivo(self) -> str:
         return self.config.get("retiro_automatico", {}).get("dispositivo", "")
 
+    # --- Llamada SIP a la central (conserjería / centro de monitoreo) ---
+    @property
+    def sip_habilitado(self) -> bool:
+        return bool(self.config.get("sip", {}).get("habilitado", False))
+
+    @property
+    def sip_config(self) -> dict:
+        return self.config.get("sip", {})
+
     # --- Sincronización offline-first ---
     @property
     def db_local(self) -> str:

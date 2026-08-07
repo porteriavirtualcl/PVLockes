@@ -111,6 +111,48 @@ ofreciendo el flujo tradicional (ambos botones) como respaldo.
 En Windows/Mac (desarrollo) `evdev` no existe: el lector queda **inactivo** sin
 romper la app; el retiro se prueba por pantalla.
 
+## Llamada a la central (SIP)
+
+El kiosco puede **llamar a una central de conserjería / centro de monitoreo**
+por SIP (caso objetivo: una *Master Station* Dahua VTS registrada en un servidor
+DSS). Aparece un botón **📞 Llamar · Conserjería** en la pantalla principal.
+
+Módulo: `sip_service.py` (backend **PJSIP/pjsua2**, códec **G.711**). Corre en
+su propio hilo y es **tolerante a fallos**: si `pjsua2` no está instalado o el
+SIP está deshabilitado, el kiosco funciona igual y el botón no aparece.
+
+### Requisitos
+1. **Hardware de audio:** un **speakerphone USB** (mic + parlante con
+   cancelación de eco). La Raspberry no tiene micrófono.
+2. **pjsua2** instalado (ver `requirements.txt`, sección SIP):
+   ```bash
+   sudo apt install python3-pjproject   # provee 'import pjsua2'
+   ```
+   Si no está en los repos, compilar `pjproject` con `--enable-shared` + bindings
+   Python (SWIG) y `make install`.
+3. **Cuenta SIP** creada en el DSS para el kiosco (número + clave de registro),
+   la dirección del servidor SIP del DSS, y el número de la central a marcar.
+
+### Configuración (`config.json` → `sip`)
+```json
+{
+  "habilitado": true,
+  "servidor": "IP_DEL_DSS",
+  "puerto": 5060,
+  "usuario": "NUMERO_DEL_KIOSCO",
+  "password": "CLAVE_SIP",
+  "dominio": "",
+  "destino": "NUMERO_DE_LA_CENTRAL",
+  "puerto_local": 5060,
+  "codecs": ["PCMU/8000", "PCMA/8000"]
+}
+```
+- `dominio` vacío = usa `servidor`. `destino` acepta un número o una URI `sip:...`.
+- Requiere que el SIP (5060/UDP) y el audio (RTP) lleguen entre la Pi y el DSS.
+
+En Windows/Mac (desarrollo) `pjsua2` no existe: el módulo queda **inactivo** sin
+romper la app.
+
 ## Pendiente
 
 - (Opcional) Notificación push/WhatsApp al residente al depositar (la app de

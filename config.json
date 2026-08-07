@@ -38,6 +38,26 @@
     "dispositivo": ""
   },
 
+  "sip": {
+    "_comentario": "Llamada a la central de conserjería/monitoreo por SIP (ej. Master Station Dahua VTS registrada en un servidor DSS). Backend: baresip (apt install baresip) + baresipy (pip). Requiere además un speakerphone USB (mic + parlante con cancelación de eco). Si está deshabilitado o falta baresipy, el kiosco funciona igual sin el botón de llamada.",
+    "habilitado": false,
+    "_comentario_credenciales": "Cuenta SIP del kiosco (servidor DSS + usuario/clave de registro).",
+    "servidor": "",
+    "puerto": 5060,
+    "usuario": "",
+    "password": "",
+    "_comentario_transporte": "Transporte SIP: 'udp' (lo normal), 'tcp' o 'tls'.",
+    "transporte": "udp",
+    "_comentario_destino": "Número/extensión de la central a marcar (o 'sip:...').",
+    "destino": ""
+  },
+
+  "llamada": {
+    "_comentario": "Residente al que llama el botón 'Llamar' del kiosco (WebRTC → app web del residente). En producción esto debería elegirse por unidad; por ahora un destino fijo de prueba.",
+    "destino_uid": "MB17vqfRMohh6BSCntu4bBlX1jo1",
+    "destino_nombre": "Jony Bravo (Depto 100)"
+  },
+
   "sincronizacion": {
     "_comentario": "Capa offline-first: los datos viven en SQLite local y se sincronizan con Firebase cuando hay internet.",
     "db_local": "porteria_local.db",

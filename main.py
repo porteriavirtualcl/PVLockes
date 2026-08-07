@@ -22,6 +22,7 @@ Flujo "Dejar Encomienda":
        El residente ve el QR de retiro en su app (valor = parcel_id).
 """
 
+import queue
 import logging
 import tkinter as tk
 from tkinter import font as tkfont
@@ -33,6 +34,8 @@ from firebase_service import FirebaseService, FirebaseNoDisponibleError
 from sync_service import SyncService
 from scanner_listener import ScannerListener
 from command_listener import CommandListener
+from sip_service import SipService
+from webrtc_call_service import WebRTCCallService
 from resource_allocator import ResourceAllocator, SinDisponibilidadError
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -100,6 +103,34 @@ class PorteriaApp(tk.Tk):
             on_abrir=self._abrir_remoto,
         )
         self.command_listener.iniciar()
+
+        # Llamada SIP a la central (opcional; solo si está habilitado en config).
+        # El callback de estado se reprograma con after() para tocar Tkinter
+        # de forma segura desde los hilos de pjsua2.
+        self.sip = None
+        # baresip corre en OTRO hilo y no puede tocar Tkinter directamente
+        # ("main thread is not in main loop"). El hilo del SIP encola los estados
+        # en esta cola thread-safe; el hilo de la GUI la drena con un poller.
+        self._sip_estado_q = queue.Queue()
+        if self.config_mgr.sip_habilitado:
+            self.sip = SipService(
+                self.config_mgr.sip_config,
+                on_estado=lambda estado, detalle: self._sip_estado_q.put((estado, detalle)),
+            )
+            self.sip.iniciar()
+            self.after(400, self._poll_sip_estado)
+
+        # Llamada de AUDIO al residente por WebRTC (reutiliza el botón "Llamar").
+        # Corre en su propio hilo; los estados se encolan y la GUI los drena con
+        # un poller (thread-safe, igual patrón que el SIP).
+        self.webrtc = None
+        self._webrtc_estado_q = queue.Queue()
+        if self.firebase is not None:
+            self.webrtc = WebRTCCallService(
+                self.firebase, self.config_mgr,
+                on_estado=lambda estado, detalle: self._webrtc_estado_q.put((estado, detalle)),
+            )
+            self.after(400, self._poll_webrtc_estado)
 
         # --- Estado del flujo en curso ---
         self.datos_flujo = {}
@@ -246,12 +277,21 @@ class PorteriaApp(tk.Tk):
                                  self.iniciar_dejar, COLOR_MARCA, w=ancho)
         b2 = self._boton_tarjeta(marco, "📤", "Retirar", "Encomienda",
                                  self.iniciar_retirar, COLOR_MORADO, w=ancho)
+        # Botón de llamada a la central: solo si el SIP está habilitado.
+        b3 = None
+        if self.webrtc is not None:
+            b3 = self._boton_tarjeta(marco, "📞", "Llamar", "Residente",
+                                     self.iniciar_llamada, COLOR_OK, w=ancho)
         if self.vertical:
             b1.grid(row=0, column=0, pady=12)
             b2.grid(row=1, column=0, pady=12)
+            if b3 is not None:
+                b3.grid(row=2, column=0, pady=12)
         else:
             b1.grid(row=0, column=0, padx=18)
             b2.grid(row=0, column=1, padx=18)
+            if b3 is not None:
+                b3.grid(row=1, column=0, columnspan=2, pady=(18, 0))
 
         self._pie_estado()
 
@@ -552,6 +592,113 @@ class PorteriaApp(tk.Tk):
             return False, str(e)
 
     # ================================================================== #
+    # Llamada SIP a la central (conserjería / centro de monitoreo)
+    # ================================================================== #
+    # Textos amigables para cada estado que informa el SipService.
+    _TEXTO_ESTADO_SIP = {
+        "inicializando": "Preparando llamada…",
+        "registrando": "Conectando con la central…",
+        "registrado": "Listo para llamar",
+        "error_registro": "No se pudo conectar con la central",
+        "llamando": "Llamando…",
+        "timbrando": "Timbrando…",
+        "en_llamada": "En llamada",
+        "colgado": "Llamada finalizada",
+        "fallo_llamada": "No se pudo establecer la llamada",
+        "no_disponible": "Llamada no disponible",
+    }
+
+    def iniciar_llamada(self):
+        """Botón 'Llamar': llama por WebRTC a la app del residente (audio)."""
+        if self.webrtc is None:
+            return
+        destino = self._destino_llamada()
+        self._pantalla_llamada(destino.get("nombre", "Residente"))
+        self.webrtc.llamar(destino)
+
+    def _destino_llamada(self) -> dict:
+        """Residente a llamar. Configurable en config.json -> 'llamada'."""
+        ll = self.config_mgr.as_dict().get("llamada", {})
+        return {"uid": ll.get("destino_uid", ""),
+                "nombre": ll.get("destino_nombre", "Residente")}
+
+    def _pantalla_llamada(self, nombre: str = "Residente"):
+        self._limpiar()
+        tk.Label(self.contenedor, text="Llamando a", font=self.f_texto,
+                 bg=COLOR_FONDO, fg=COLOR_TENUE).pack(pady=(50, 0))
+        tk.Label(self.contenedor, text=nombre, font=self.f_titulo,
+                 bg=COLOR_FONDO, fg=COLOR_TEXTO, wraplength=440).pack(pady=(0, 10))
+        tk.Label(self.contenedor, text="📞", font=("Helvetica", 90),
+                 bg=COLOR_FONDO, fg=COLOR_OK).pack(pady=10)
+
+        # Etiqueta de estado (se actualiza desde _on_estado_webrtc).
+        self._lbl_estado_llamada = tk.Label(
+            self.contenedor, text="Llamando…", font=self.f_texto,
+            bg=COLOR_FONDO, fg=COLOR_TENUE)
+        self._lbl_estado_llamada.pack(pady=(0, 30))
+
+        self._boton(self.contenedor, "🔴 Colgar", self._colgar_llamada,
+                    color=COLOR_ERROR).pack(pady=10)
+
+    def _colgar_llamada(self):
+        if self.webrtc is not None:
+            self.webrtc.colgar()
+        self.mostrar_principal()
+
+    # Textos amigables para los estados de la llamada WebRTC.
+    _TEXTO_ESTADO_LLAMADA = {
+        "preparando": "Preparando llamada…",
+        "timbrando": "Llamando… (esperando que contesten)",
+        "en_llamada": "En llamada",
+        "colgado": "Llamada finalizada",
+        "finalizado": "Llamada finalizada",
+        "sin_respuesta": "No contestaron",
+        "rechazada": "Llamada rechazada",
+        "fallo": "No se pudo llamar",
+        "no_disponible": "Llamada no disponible",
+    }
+
+    def _poll_webrtc_estado(self):
+        """Drena la cola de estados de la llamada WebRTC (hilo de la GUI)."""
+        try:
+            while True:
+                estado, detalle = self._webrtc_estado_q.get_nowait()
+                self._on_estado_webrtc(estado, detalle)
+        except queue.Empty:
+            pass
+        self.after(300, self._poll_webrtc_estado)
+
+    def _on_estado_webrtc(self, estado: str, detalle: str = ""):
+        """Estado de la llamada WebRTC (drenado en el hilo de la GUI)."""
+        texto = self._TEXTO_ESTADO_LLAMADA.get(estado, estado)
+        lbl = getattr(self, "_lbl_estado_llamada", None)
+        if lbl is not None and lbl.winfo_exists():
+            lbl.config(text=texto)
+            if estado in ("colgado", "finalizado", "sin_respuesta", "rechazada", "fallo"):
+                self.after(2500, self.mostrar_principal)
+
+    def _poll_sip_estado(self):
+        """Drena la cola de estados del SIP en el hilo de la GUI (thread-safe)."""
+        try:
+            while True:
+                estado, detalle = self._sip_estado_q.get_nowait()
+                self._on_estado_sip(estado, detalle)
+        except queue.Empty:
+            pass
+        self.after(300, self._poll_sip_estado)
+
+    def _on_estado_sip(self, estado: str, detalle: str = ""):
+        """Estado del SIP (drenado desde la cola, en el hilo de la GUI)."""
+        texto = self._TEXTO_ESTADO_SIP.get(estado, estado)
+        lbl = getattr(self, "_lbl_estado_sip", None)
+        # Solo actualiza si la pantalla de llamada sigue visible.
+        if lbl is not None and lbl.winfo_exists():
+            lbl.config(text=texto)
+            # Si la llamada terminó/falló, volver al inicio tras un momento.
+            if estado in ("colgado", "fallo_llamada", "error_registro"):
+                self.after(2500, self.mostrar_principal)
+
+    # ================================================================== #
     # Pantalla de escaneo de QR (lector actúa como teclado + Enter)
     # ================================================================== #
     def _pantalla_escaneo(self, titulo, on_confirmar):
@@ -649,6 +796,10 @@ class PorteriaApp(tk.Tk):
                 self.scanner.detener()
             if self.command_listener is not None:
                 self.command_listener.detener()
+            if self.sip is not None:
+                self.sip.detener()
+            if self.webrtc is not None:
+                self.webrtc.detener()
             self.sync.detener()
             self.local_store.close()
             self.hardware.cleanup()

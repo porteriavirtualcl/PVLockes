@@ -300,6 +300,46 @@ class FirebaseService:
         logger.info("Parcel %s actualizado en Firebase.", parcel_id)
 
     # ------------------------------------------------------------------ #
+    # Llamadas de audio WebRTC (portería -> app del residente): señalización
+    # en la colección top-level 'calls'. El kiosco (service account) crea el
+    # doc con la oferta y sondea la respuesta; la app del residente contesta.
+    # ------------------------------------------------------------------ #
+    def crear_llamada(self, call_id: str, datos: dict):
+        fields = _dict_to_fields({
+            "from": datos.get("from", ""),
+            "fromName": datos.get("from_name", ""),
+            "to": datos.get("to", ""),
+            "toName": datos.get("to_name", ""),
+            "condoId": datos.get("condo_id", ""),
+            "status": datos.get("status", "ringing"),
+            "offerType": datos.get("offer_type", "offer"),
+            "offerSdp": datos.get("offer_sdp", ""),
+            "answerType": "",
+            "answerSdp": "",
+            "endedBy": "",
+        })
+        fields["createdAt"] = {"timestampValue": _iso_to_rfc3339(datos.get("created_at"))}
+        r = self._patch(f"calls/{call_id}", {"fields": fields})
+        if r.status_code not in (200, 201):
+            raise FirebaseNoDisponibleError(f"crear_llamada {r.status_code}: {r.text[:200]}")
+        logger.info("Llamada %s creada (to=%s).", call_id, datos.get("to"))
+
+    def obtener_llamada(self, call_id: str) -> dict | None:
+        r = self._get(f"calls/{call_id}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise FirebaseNoDisponibleError(f"obtener_llamada {r.status_code}: {r.text[:200]}")
+        return _fields_to_dict(r.json().get("fields", {}))
+
+    def actualizar_llamada(self, call_id: str, campos: dict):
+        fields = {k: _to_value(v) for k, v in campos.items()}
+        qs = "&".join(f"updateMask.fieldPaths={k}" for k in campos)
+        r = self._patch(f"calls/{call_id}?{qs}", {"fields": fields})
+        if r.status_code not in (200, 201):
+            raise FirebaseNoDisponibleError(f"actualizar_llamada {r.status_code}: {r.text[:200]}")
+
+    # ------------------------------------------------------------------ #
     # Comandos de apertura remota (polling; REST no tiene listener realtime)
     # ------------------------------------------------------------------ #
     def obtener_comandos_pendientes(self, kiosk_id: str) -> list:

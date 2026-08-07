@@ -27,5 +27,13 @@ pillow>=10.0.0
 # Instalar por apt:  sudo apt install python3-evdev
 # (o pip install evdev si no se usa --system-site-packages)
 
+# --- Llamada SIP a la central (OPCIONAL; solo si sip.habilitado=true) ---
+# Backend PJSIP (pjsua2). En la Raspberry se instala con las bindings de Python
+# de pjproject (SWIG). La vía más simple por apt:
+#     sudo apt install python3-pjproject   # provee 'import pjsua2'
+# Si no está en los repos, compilar pjproject con --enable-shared y las bindings
+# python (ver README, sección "Llamada SIP"). Requiere además un speakerphone USB.
+# Si pjsua2 no está instalado, el módulo SIP queda inactivo y el kiosco funciona igual.
+
 # Nota: Tkinter viene incluido con Python estándar (no requiere pip).
 # En Raspberry Pi OS: sudo apt-get install python3-tk
