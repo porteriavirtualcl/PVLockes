@@ -39,6 +39,7 @@ _KEYMAP = {
     "KEY_Z": "z", "KEY_MINUS": "-",
 }
 _TECLAS_ENTER = ("KEY_ENTER", "KEY_KPENTER")
+_TECLAS_SHIFT = ("KEY_LEFTSHIFT", "KEY_RIGHTSHIFT")
 
 
 class ScannerListener:
@@ -57,10 +58,6 @@ class ScannerListener:
     # ------------------------------------------------------------------ #
     def iniciar(self) -> bool:
         """Abre el dispositivo y arranca el hilo. Devuelve True si quedó activo."""
-        if not self.dispositivo:
-            logger.info("Retiro automático: sin dispositivo configurado (inactivo).")
-            return False
-
         try:
             import evdev  # noqa: F401
         except ImportError:
@@ -69,6 +66,22 @@ class ScannerListener:
                 "El lector dedicado queda inactivo; use el retiro por pantalla."
             )
             return False
+
+        # Resolver el dispositivo: si no hay uno configurado, o el configurado no
+        # existe, se auto-detecta cualquier teclado HID (así un lector nuevo
+        # funciona sin editar la config; su ruta by-id cambia según el modelo).
+        import os
+        dispositivo = self.dispositivo
+        if not dispositivo or dispositivo == "auto" or not os.path.exists(dispositivo):
+            if dispositivo and dispositivo != "auto":
+                logger.info("Retiro automático: '%s' no existe; autodetectando lector…",
+                            dispositivo)
+            dispositivo = self._autodetectar()
+            if not dispositivo:
+                logger.info("Retiro automático: no se encontró ningún lector HID (inactivo).")
+                return False
+            logger.info("Retiro automático: lector autodetectado en %s", dispositivo)
+        self.dispositivo = dispositivo
 
         try:
             from evdev import InputDevice
@@ -89,9 +102,44 @@ class ScannerListener:
         return True
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _autodetectar() -> str | None:
+        """
+        Busca un teclado HID (un lector QR se presenta como teclado). Elige el
+        primer dispositivo que tenga ENTER + dígitos y NO sea táctil/mouse.
+        Excluye la pantalla táctil (MPI7002) para no capturarla por error.
+        """
+        try:
+            from evdev import InputDevice, list_devices, ecodes
+        except ImportError:
+            return None
+        for path in list_devices():
+            try:
+                d = InputDevice(path)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                caps = d.capabilities()
+                keys = caps.get(ecodes.EV_KEY, [])
+                tiene_enter = ecodes.KEY_ENTER in keys
+                tiene_digitos = ecodes.KEY_1 in keys and ecodes.KEY_0 in keys
+                es_tactil = ecodes.EV_ABS in caps           # touchscreen/touchpad
+                nombre = (d.name or "").lower()
+                excluido = "mpi7002" in nombre or "touch" in nombre
+                if tiene_enter and tiene_digitos and not es_tactil and not excluido:
+                    return path
+            finally:
+                try:
+                    d.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        return None
+
+    # ------------------------------------------------------------------ #
     def _loop(self):
         from evdev import categorize, ecodes
         buffer = ""
+        shift = False  # los IDs de Firestore distinguen may/min: hay que respetar shift
         try:
             for event in self._device.read_loop():
                 if self._stop.is_set():
@@ -99,12 +147,18 @@ class ScannerListener:
                 if event.type != ecodes.EV_KEY:
                     continue
                 data = categorize(event)
-                if data.keystate != data.key_down:  # solo pulsación (key down)
-                    continue
 
                 keycode = data.keycode
                 if isinstance(keycode, list):  # evdev puede devolver lista de alias
                     keycode = keycode[0]
+
+                # El shift se rastrea en down y up (no es una "pulsación" que emita char).
+                if keycode in _TECLAS_SHIFT:
+                    shift = (data.keystate != data.key_up)
+                    continue
+
+                if data.keystate != data.key_down:  # el resto: solo pulsación (key down)
+                    continue
 
                 if keycode in _TECLAS_ENTER:
                     codigo = buffer.strip()
@@ -112,8 +166,9 @@ class ScannerListener:
                     if codigo:
                         self._disparar(codigo)
                 elif keycode in _KEYMAP:
-                    buffer += _KEYMAP[keycode]
-                # Otras teclas (shift, etc.) se ignoran.
+                    ch = _KEYMAP[keycode]
+                    buffer += ch.upper() if shift and ch.isalpha() else ch
+                # Otras teclas se ignoran.
         except OSError as e:
             logger.error("Retiro automático: lectura interrumpida: %s", e)
         finally:

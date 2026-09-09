@@ -53,9 +53,35 @@
   },
 
   "llamada": {
-    "_comentario": "Residente al que llama el botón 'Llamar' del kiosco (WebRTC → app web del residente). En producción esto debería elegirse por unidad; por ahora un destino fijo de prueba.",
+    "_comentario": "Botón 'Llamar' del kiosco. 'habilitado' controla si la tarjeta aparece en pantalla (aplica a SIP y WebRTC). Destino WebRTC: residente de prueba.",
+    "habilitado": true,
     "destino_uid": "MB17vqfRMohh6BSCntu4bBlX1jo1",
     "destino_nombre": "Jony Bravo (Depto 100)"
+  },
+
+  "asistente_ia": {
+    "_comentario": "Conserje IA de voz (PILOTO) para ayudar al repartidor a dejar encomiendas. Motor: Gemini Live API (audio en tiempo real). Requiere 'pip install google-genai sounddevice numpy' y un speakerphone USB. Si está deshabilitado o falta la API key/dependencias, el kiosco funciona igual sin el asistente.",
+    "habilitado": false,
+    "_comentario_apikey": "API key de Gemini (Google AI Studio). Orden de resolución: api_key -> api_key_file -> variable de entorno GEMINI_API_KEY. Usar api_key_file para no dejar la key en este JSON.",
+    "api_key": "",
+    "api_key_file": "",
+    "_comentario_modelo": "Modelo Live de Gemini. Por defecto 'gemini-2.5-flash-native-audio-latest' (voz natural, detecta idioma por el prompt).",
+    "modelo": "gemini-2.5-flash-native-audio-latest",
+    "_comentario_idioma": "Código de idioma para la voz (ej. 'es-US', 'es-ES').",
+    "idioma": "es-US"
+  },
+
+  "llamada_ia": {
+    "_comentario": "Recepcionista de VOZ del botón 'Llamar': una IA contesta, pregunta qué necesita la persona y deriva (transferir al residente por SIP / indicaciones de encomienda / transferir al operador). Requiere asistente_ia habilitado + sip (trunk) habilitado.",
+    "habilitado": false,
+    "_comentario_operador": "Número del operador humano de Portería Virtual (formato +E164).",
+    "operador": "+56998720269"
+  },
+
+  "camara": {
+    "_comentario": "Preview en vivo de una cámara USB (UVC) en la pantalla principal, junto al logo. Requiere PyAV + Pillow y una webcam en /dev/video0. Si está deshabilitada o falta la cámara/dependencias, el kiosco funciona igual sin preview.",
+    "habilitada": false,
+    "dispositivo": "/dev/video0"
   },
 
   "sincronizacion": {
@@ -81,6 +107,18 @@
     "rele_activo_en_bajo": true,
     "_comentario_pulso": "Tiempo en segundos que el relé permanece accionado para liberar la cerradura electromagnética.",
     "duracion_pulso_seg": 1.5
+  },
+
+  "puerta_sala": {
+    "_comentario": "Puerta de acceso a la SALA donde están instalados los lockers (electroimán / cerradura magnética). Se libera EN PARALELO con la cerradura del locker cada vez que se asigna una encomienda: el repartidor entra a la sala y encuentra el casillero ya abierto.",
+    "habilitado": true,
+    "_comentario_pin": "Pin BCM del canal de relé dedicado a esta puerta. Debe ser distinto de todos los pines de 'recursos'. BCM 4 (pin físico 7) es el recomendado: al pertenecer al rango BCM 0-8 arranca en HIGH por el pull-up del SoC, así el electroimán NO se suelta durante el arranque de la Raspberry.",
+    "pin": 4,
+    "_comentario_pulso": "Segundos que la puerta queda liberada. Es bastante más largo que el de un locker, por eso su pulso corre en un hilo aparte y no congela la pantalla.",
+    "duracion_pulso_seg": 10,
+    "_comentario_cableado": "Un electroimán es FAIL-SAFE: retiene con corriente y suelta al cortarla. Se cablea al contacto NC (normalmente cerrado) del relé, NO al NA. Así en reposo el imán queda energizado (puerta retenida) y al accionar el relé se corta la corriente durante el pulso.",
+    "_comentario_activo_en_bajo": "Por defecto hereda 'gpio.rele_activo_en_bajo'. Solo se declara aquí si esta puerta usa un módulo con lógica invertida respecto de las cerraduras.",
+    "activo_en_bajo": null
   },
 
   "recursos": {

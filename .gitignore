@@ -3,6 +3,11 @@
 secrets/
 *.json.key
 firebase-service-account.json
+apikey.txt
+
+# Dependencias y respaldos que no se versionan
+admin-local/node_modules/
+respaldo-kiosk-*.json
 
 # Base de datos local del kiosco (datos de operación, no versionar)
 *.db

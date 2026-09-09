@@ -76,6 +76,7 @@ class SipService:
 
         self._phone = None
         self._estado = "no_disponible"
+        self._anuncio_wav: str | None = None
 
     # ------------------------------------------------------------------ #
     # API pública (segura desde el hilo de la GUI)
@@ -98,6 +99,10 @@ class SipService:
         password = self.cfg.get("password", "")
         transporte = self.cfg.get("transporte", "udp")
         puerto = self.cfg.get("puerto", 5060)
+        # Modo TRUNK (autenticación por IP, ej. Netexplora): NO se registra.
+        # El SBC autoriza por la IP de origen; un REGISTER daría 403 y los 403
+        # repetidos gatillan el fail2ban del proveedor (ban silencioso de IP).
+        trunk = bool(self.cfg.get("trunk", False))
 
         if not (servidor and usuario):
             self._emitir("error_registro", "Faltan credenciales SIP (servidor/usuario).")
@@ -106,25 +111,40 @@ class SipService:
         # baresipy arma la cuenta como sip:usuario@gateway. Si el puerto no es el
         # estándar, se incluye en el gateway (host:puerto).
         gateway = servidor if int(puerto) == 5060 else f"{servidor}:{puerto}"
+        if trunk:
+            gateway += ";regint=0"   # crea la cuenta SIN registrar
 
         try:
             self._emitir("registrando", gateway)
             # block=False -> baresipy arranca su hilo y vuelve enseguida.
-            self._phone = _Telefono(self, usuario, password, gateway, transport=transporte)
+            self._phone = _Telefono(self, usuario, password, gateway,
+                                    transport=transporte, trunk=trunk)
         except Exception as e:  # noqa: BLE001
             logger.error("Error iniciando baresip: %s", e)
             self._emitir("error_registro", str(e))
             self._phone = None
 
-    def llamar(self):
-        """Llama a la central (destino definido en la config)."""
+    def llamar(self, destino: str | None = None, anuncio_wav: str | None = None):
+        """
+        Llama al `destino` dado (número) o al de la config si no se indica.
+
+        `anuncio_wav`: ruta a un WAV que se reproduce DENTRO de la llamada al
+        contestar (ej. "tiene una llamada desde la portería, de parte de X");
+        al terminar, baresip devuelve el audio al micrófono. El archivo puede
+        estar aún generándose (TTS): se espera hasta ~8 s a que exista.
+        """
+        self._anuncio_wav = anuncio_wav
         if not self.disponible or self._phone is None:
             self._emitir("no_disponible", "SIP no disponible")
             return
-        destino = self.cfg.get("destino", "").strip()
+        destino = (destino or self.cfg.get("destino", "")).strip()
         if not destino:
             self._emitir("fallo_llamada", "No hay 'destino' (número de la central) configurado.")
             return
+        # URI explícita contra el servidor (necesario en modo trunk, inocuo con registro).
+        if not destino.startswith("sip:"):
+            servidor = self.cfg.get("servidor", "").strip()
+            destino = f"sip:{destino}@{servidor}"
         try:
             self._phone.call(destino)
             self._emitir("llamando", destino)
@@ -176,16 +196,32 @@ if _BARESIP_OK:
     class _Telefono(BareSIP):
         """Teléfono SIP: mapea los eventos de baresip a on_estado del servicio."""
 
-        def __init__(self, servicio: "SipService", user, pwd, gateway, transport="udp"):
+        def __init__(self, servicio: "SipService", user, pwd, gateway,
+                     transport="udp", trunk=False):
             self._svc = servicio
+            self._trunk = trunk
             # block=False: no bloquear; baresip corre en su propio hilo.
             super().__init__(user, pwd, gateway, transport=transport, block=False)
+
+        # --- Listo (baresip arrancó) ---
+        def handle_ready(self, *a):  # noqa: N802
+            # En modo TRUNK no hay registro: baresipy solo marca ready al
+            # registrar, así que lo forzamos aquí para poder marcar.
+            if self._trunk:
+                self.ready = True
+                self._svc._emitir("registrado", "trunk (sin registro)")
+            try:
+                super().handle_ready()
+            except Exception:  # noqa: BLE001
+                pass
 
         # --- Registro ---
         def handle_login_success(self, *a):  # noqa: N802
             self._svc._emitir("registrado", "")
 
         def handle_login_failure(self, *a):  # noqa: N802
+            if self._trunk:
+                return  # en trunk el registro no aplica; ignorar
             self._svc._emitir("error_registro", str(a[0]) if a else "")
 
         # --- Llamada saliente ---
@@ -194,6 +230,35 @@ if _BARESIP_OK:
 
         def handle_call_established(self, *a):  # noqa: N802
             self._svc._emitir("en_llamada", "")
+            # Anuncio dentro de la llamada (ej. "tiene una llamada desde la
+            # portería, de parte de X"). En un hilo aparte: send_audio duerme
+            # mientras reproduce y no hay que bloquear el loop de eventos.
+            wav = getattr(self._svc, "_anuncio_wav", None)
+            if wav:
+                self._svc._anuncio_wav = None
+                import threading as _th
+                _th.Thread(target=self._reproducir_anuncio, args=(wav,),
+                           daemon=True).start()
+
+        def _reproducir_anuncio(self, wav):
+            import os
+            import time as _t
+            # El TTS se lanza cuando la IA toma el nombre, así que normalmente
+            # ya está listo; margen corto por si acaso.
+            for _ in range(10):
+                if os.path.exists(wav):
+                    break
+                _t.sleep(0.4)
+            if not os.path.exists(wav):
+                logger.warning("Anuncio TTS no disponible; la llamada sigue sin anuncio.")
+                return
+            _t.sleep(0.8)   # dejar asentar el audio de la llamada (celular)
+            try:
+                self._svc._emitir("anunciando", os.path.basename(wav))
+                self.send_audio(wav)   # reproduce y devuelve el mic (alsa,default)
+                logger.info("Anuncio reproducido en la llamada; mic restaurado.")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("No se pudo reproducir el anuncio: %s", e)
 
         def handle_call_ended(self, *a):  # noqa: N802
             self._svc._emitir("colgado", str(a[0]) if a else "")

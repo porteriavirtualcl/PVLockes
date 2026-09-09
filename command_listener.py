@@ -33,7 +33,9 @@ class CommandListener:
         Args:
             firebase: instancia de FirebaseService.
             kiosk_id: id de este equipo.
-            on_abrir: callback (locker_id, operacion) -> (ok: bool, error: str).
+            on_abrir: callback (locker_id, operacion, accion) -> (ok, error).
+                      accion: "abrir" (una cerradura), "abrir_sala" (puerta de
+                      la sala) o "abrir_todas" (todas las cerraduras).
             intervalo_seg: cada cuánto revisa comandos pendientes.
         """
         self.firebase = firebase
@@ -70,11 +72,13 @@ class CommandListener:
         cmd_id = c.get("id")
         locker_id = c.get("lockerId")
         operacion = c.get("operacion", "retiro")
-        logger.info("Comando de apertura remota: locker=%s operacion=%s", locker_id, operacion)
+        accion = c.get("accion", "abrir")
+        logger.info("Comando remoto: accion=%s locker=%s operacion=%s",
+                    accion, locker_id, operacion)
 
         ok, error = False, ""
         try:
-            ok, error = self.on_abrir(locker_id, operacion)
+            ok, error = self.on_abrir(locker_id, operacion, accion)
         except Exception as e:  # noqa: BLE001
             ok, error = False, str(e)
 

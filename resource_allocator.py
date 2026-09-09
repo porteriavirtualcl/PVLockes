@@ -83,6 +83,9 @@ class ResourceAllocator:
             raise ValueError("Este sistema no tiene lockers.")
 
         for lk in self.cm.get_lockers():
+            # Fuera de servicio: no se asigna aunque esté libre.
+            if lk.get("operativo") is False:
+                continue
             if lk["id"] not in self._ocupados:
                 self.marcar_ocupado(lk["id"])
                 logger.info("Locker %s asignado.", lk["id"])

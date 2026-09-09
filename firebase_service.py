@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 _TIMEOUT = 20          # segundos por request (evita cuelgues)
-_SCOPE = "https://www.googleapis.com/auth/datastore"
+# 'datastore' para Firestore REST y 'firebase.messaging' para el push FCM v1:
+# la misma service account firma ambas APIs, así que basta una sola sesión.
+_SCOPES = [
+    "https://www.googleapis.com/auth/datastore",
+    "https://www.googleapis.com/auth/firebase.messaging",
+]
 
 
 class FirebaseNoDisponibleError(Exception):
@@ -121,7 +126,7 @@ class FirebaseService:
                     f"No se encontró el archivo de credenciales: {cred_path}"
                 )
             creds = service_account.Credentials.from_service_account_file(
-                cred_path, scopes=[_SCOPE]
+                cred_path, scopes=_SCOPES
             )
             self.project_id = creds.project_id or os.getenv("FIREBASE_PROJECT_ID", "")
             self._session = AuthorizedSession(creds)
@@ -249,6 +254,9 @@ class FirebaseService:
             "condoName": datos.get("condo_name", ""),
             "residentName": datos.get("resident_name", ""),
             "residentUserId": datos.get("resident_user_id", ""),
+            # UIDs de TODOS los residentes de la unidad: la app muestra el QR a
+            # cualquiera del depto que tenga la app, no solo al destinatario.
+            "unitUserIds": datos.get("unit_user_ids", []),
             "unit": str(datos.get("unit", "")),
             "status": datos.get("status", "pending"),
             "createdByName": datos.get("created_by_name", "Kiosco"),
@@ -298,6 +306,56 @@ class FirebaseService:
         if r.status_code not in (200, 201):
             raise FirebaseNoDisponibleError(f"actualizar_parcel {r.status_code}: {r.text[:200]}")
         logger.info("Parcel %s actualizado en Firebase.", parcel_id)
+
+    # ------------------------------------------------------------------ #
+    # Push a la app del residente (FCM HTTP v1)
+    # ------------------------------------------------------------------ #
+    def enviar_push(self, fcm_token: str, titulo: str, cuerpo: str,
+                    datos: dict | None = None) -> bool:
+        """
+        Envía una notificación push a un dispositivo por FCM HTTP v1.
+
+        Se usa para avisarle al residente que llegó su encomienda; el QR de
+        retiro lo dibuja la app a partir del `parcelId` que viaja en `datos`
+        (una notificación no puede transportar la imagen).
+
+        Todos los valores de `datos` deben ser strings: es requisito de FCM.
+
+        Returns:
+            True si FCM aceptó el mensaje. Nunca lanza: un push fallido no debe
+            arrastrar al resto del flujo (la encomienda ya está depositada).
+        """
+        if not fcm_token:
+            logger.info("Push omitido: el residente no tiene fcm_token.")
+            return False
+        if not self._conectado or self._session is None:
+            logger.info("Push omitido: sin sesión con Firebase.")
+            return False
+
+        mensaje = {
+            "message": {
+                "token": fcm_token,
+                "notification": {"title": titulo, "body": cuerpo},
+                "data": {k: str(v) for k, v in (datos or {}).items()},
+            }
+        }
+        url = f"https://fcm.googleapis.com/v1/projects/{self.project_id}/messages:send"
+        try:
+            r = self._session.post(url, json=mensaje, timeout=_TIMEOUT)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Push no enviado (error de red): %s", e)
+            return False
+
+        if r.status_code == 200:
+            logger.info("Push enviado al residente (%s).", titulo)
+            return True
+
+        # 404/UNREGISTERED = el token murió (app desinstalada o reinstalada).
+        if r.status_code == 404:
+            logger.info("Push rechazado: el fcm_token ya no es válido.")
+        else:
+            logger.warning("Push rechazado por FCM %s: %s", r.status_code, r.text[:200])
+        return False
 
     # ------------------------------------------------------------------ #
     # Llamadas de audio WebRTC (portería -> app del residente): señalización

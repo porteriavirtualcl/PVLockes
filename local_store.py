@@ -167,6 +167,21 @@ class LocalStore:
                             "unit": f["unit"], "fcm_token": f["fcm_token"]})
         return out
 
+    def get_fcm_token(self, uid: str) -> str:
+        """
+        Token de push del residente, o "" si no tiene.
+
+        Muchos residentes están en estado 'Pendiente' y nunca abrieron la app:
+        para ellos este campo viene vacío y el push simplemente no se manda.
+        """
+        if not uid:
+            return ""
+        with self._lock:
+            fila = self._conn.execute(
+                "SELECT fcm_token FROM residentes WHERE uid = ?", (uid,)
+            ).fetchone()
+        return (fila["fcm_token"] or "") if fila else ""
+
     def contar_residentes(self) -> int:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM residentes").fetchone()[0]
@@ -308,6 +323,42 @@ class LocalStore:
                 "WHERE status = 'pending' AND locker_id != ''"
             ).fetchall()
         return [f["locker_id"] for f in filas]
+
+    def encomiendas_ocupando(self) -> list:
+        """
+        Encomiendas que hoy tienen un casillero tomado (pendientes de retiro) y
+        que ya existen en Firestore. Sirve para preguntarle a Firestore si
+        alguna fue marcada como retirada DESDE la app, y así liberar el casillero.
+        Solo las remote_creado=1: de las que aún no subieron, Firestore no sabe.
+        """
+        with self._lock:
+            filas = self._conn.execute(
+                "SELECT parcel_id, locker_id FROM encomiendas "
+                "WHERE status = 'pending' AND remote_creado = 1 AND locker_id != ''"
+            ).fetchall()
+        return [dict(f) for f in filas]
+
+    def marcar_retirada_desde_remoto(self, parcel_id: str, picked_up_at=None) -> bool:
+        """
+        Marca una encomienda como retirada porque YA figura retirada en Firestore
+        (la app o el operador la marcó). A diferencia de marcar_retirada, deja
+        sync_status='sincronizado': Firestore ya tiene el estado, no hay que
+        re-empujarlo. Libera el casillero desde la vista del kiosco.
+        """
+        ahora = picked_up_at or _ahora_iso()
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """
+                UPDATE encomiendas
+                   SET status = 'picked_up', picked_up_at = ?, sync_status = 'sincronizado'
+                 WHERE parcel_id = ? AND status = 'pending'
+                """,
+                (ahora, parcel_id),
+            )
+        ok = cur.rowcount > 0
+        if ok:
+            logger.info("Encomienda %s retirada desde la app; casillero liberado.", parcel_id)
+        return ok
 
     # ------------------------------------------------------------------ #
     # Sincronización (usado por SyncService)

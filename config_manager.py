@@ -180,7 +180,13 @@ class ConfigManager:
             if not base:
                 logger.warning("Locker remoto '%s' sin pines locales; se omite.", lid)
                 continue
-            nuevos_lockers.append({**base, "tamano": lk.get("tamano", base.get("tamano"))})
+            nuevos_lockers.append({
+                **base,
+                "tamano": lk.get("tamano", base.get("tamano")),
+                # Fuera de servicio si el remoto lo marca operativo=false; por
+                # defecto operativo (para no romper equipos que no traen el campo).
+                "operativo": lk.get("operativo", True),
+            })
 
         nuevo_buzon = None
         rb = remoto.get("buzon")
@@ -268,6 +274,24 @@ class ConfigManager:
     @property
     def sip_config(self) -> dict:
         return self.config.get("sip", {})
+
+    # --- Asistente IA de voz (conserje para el repartidor) ---
+    @property
+    def asistente_ia_habilitado(self) -> bool:
+        return bool(self.config.get("asistente_ia", {}).get("habilitado", False))
+
+    @property
+    def asistente_ia_config(self) -> dict:
+        return self.config.get("asistente_ia", {})
+
+    # --- Cámara (preview en la pantalla principal) ---
+    @property
+    def camara_habilitada(self) -> bool:
+        return bool(self.config.get("camara", {}).get("habilitada", False))
+
+    @property
+    def camara_config(self) -> dict:
+        return self.config.get("camara", {})
 
     # --- Sincronización offline-first ---
     @property
