@@ -113,13 +113,30 @@ class LocalStore:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_enc_sync ON encomiendas(sync_status)"
             )
+            # Migración: columna del último recordatorio de retiro (puede faltar
+            # en bases creadas antes de esta función). Idempotente.
+            cols = [r[1] for r in self._conn.execute("PRAGMA table_info(encomiendas)").fetchall()]
+            if "last_reminder_at" not in cols:
+                self._conn.execute("ALTER TABLE encomiendas ADD COLUMN last_reminder_at TEXT")
 
     # ------------------------------------------------------------------ #
     # Residentes (caché desde Firebase 'users')
     # ------------------------------------------------------------------ #
     def upsert_residentes(self, residentes: list):
-        """Reemplaza/actualiza la caché local de residentes desde Firebase."""
+        """
+        Reconcilia la caché local de residentes con la lista de Firebase.
+
+        Hace upsert de los que llegan Y ELIMINA los que ya no existen en Firebase
+        (ej. una ficha que se migró a un uid de auth y su versión vieja se borró).
+        Sin esto, la caché acumulaba duplicados: el mismo residente con su uid
+        viejo (CRM) y su uid nuevo (auth), y el kiosco lo mostraba dos veces.
+
+        Guarda de seguridad: si la lista viene VACÍA (posible descarga fallida que
+        igual devolvió []), solo se hace el upsert y NO se poda, para no vaciar la
+        caché y dejar al kiosco sin residentes.
+        """
         ahora = _ahora_iso()
+        uids = [r.get("uid") for r in residentes if r.get("uid")]
         with self._lock, self._conn:
             for r in residentes:
                 self._conn.execute(
@@ -140,7 +157,16 @@ class LocalStore:
                         "synced_at": ahora,
                     },
                 )
-        logger.info("Caché de residentes actualizada (%s registros).", len(residentes))
+            # Podar los que ya no están en Firebase (solo si la lista no vino vacía).
+            eliminados = 0
+            if uids:
+                marcadores = ",".join("?" * len(uids))
+                cur = self._conn.execute(
+                    f"DELETE FROM residentes WHERE uid NOT IN ({marcadores})", uids
+                )
+                eliminados = cur.rowcount or 0
+        logger.info("Caché de residentes actualizada (%s registros, %s eliminados).",
+                    len(residentes), eliminados)
 
     def get_residentes_por_unidad(self, unit: str, solo_activos: bool = True) -> list:
         """
@@ -337,6 +363,34 @@ class LocalStore:
                 "WHERE status = 'pending' AND remote_creado = 1 AND locker_id != ''"
             ).fetchall()
         return [dict(f) for f in filas]
+
+    def encomiendas_para_recordar(self, intervalo_seg: int = 3600) -> list:
+        """
+        Encomiendas pendientes en un casillero cuyo último recordatorio de retiro
+        fue hace más de `intervalo_seg` (o nunca). Para el aviso periódico que
+        insiste al residente hasta que libere el casillero.
+        """
+        cutoff = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(seconds=intervalo_seg)).isoformat()
+        with self._lock:
+            # Base de tiempo: el último recordatorio, o la llegada si aún no se
+            # ha recordado (así el primer recordatorio es 1h DESPUÉS de llegar, no
+            # encima del aviso de llegada).
+            filas = self._conn.execute(
+                "SELECT parcel_id, locker_id, unit, courier FROM encomiendas "
+                "WHERE status = 'pending' AND remote_creado = 1 AND locker_id != '' "
+                "AND COALESCE(last_reminder_at, arrived_at) < ?",
+                (cutoff,),
+            ).fetchall()
+        return [dict(f) for f in filas]
+
+    def marcar_recordatorio(self, parcel_id: str, ts=None):
+        """Registra el momento del último recordatorio de retiro enviado."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE encomiendas SET last_reminder_at = ? WHERE parcel_id = ?",
+                (ts or _ahora_iso(), parcel_id),
+            )
 
     def marcar_retirada_desde_remoto(self, parcel_id: str, picked_up_at=None) -> bool:
         """

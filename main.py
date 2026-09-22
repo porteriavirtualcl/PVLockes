@@ -209,7 +209,7 @@ class PorteriaApp(tk.Tk):
         # Inactividad: fuera de la pantalla principal, si nadie toca la pantalla
         # por estos segundos, se vuelve solo al inicio (deja el kiosco listo
         # para el próximo). Es un único número, fácil de ajustar.
-        self._inactividad_seg = 5
+        self._inactividad_seg = 10
         self._inactividad_id = None
         self._en_principal = True
 
@@ -539,6 +539,32 @@ class PorteriaApp(tk.Tk):
             return partes[0][:2].upper()
         return (partes[0][0] + partes[1][0]).upper()
 
+    @staticmethod
+    def _nombre_corto(nombre: str) -> str:
+        """Primer nombre completo + 3 primeras letras del primer apellido.
+        Ej.: 'Alejandra Ahumada Contador' -> 'Alejandra Ahu'."""
+        partes = [p for p in str(nombre).split() if p]
+        if len(partes) <= 1:
+            return str(nombre)
+        return partes[0] + " " + partes[1][:3]
+
+    def _nombre_display(self, nombre: str, unidad_id) -> str:
+        """
+        Nombre a mostrar en el listado del kiosco. Por privacidad, en las unidades
+        configuradas se muestra solo el primer nombre + 3 letras del apellido.
+        Config `privacidad_nombres`: {habilitado, todas, unidades:[...]}.
+        Prueba: se aplica solo a las unidades listadas antes de extenderlo a todas.
+        """
+        priv = self.config_mgr.as_dict().get("privacidad_nombres", {}) or {}
+        if not priv.get("habilitado"):
+            return nombre
+        if priv.get("todas"):
+            return self._nombre_corto(nombre)
+        udig = "".join(ch for ch in str(unidad_id) if ch.isdigit())
+        unidades = ["".join(c for c in str(x) if c.isdigit())
+                    for x in (priv.get("unidades") or [])]
+        return self._nombre_corto(nombre) if udig in unidades else nombre
+
     def _fila_residente(self, parent, nombre, subtitulo, color_avatar, cmd,
                         w=420, h=74):
         """Fila blanca redondeada: avatar con iniciales + nombre + chevron."""
@@ -561,7 +587,13 @@ class PorteriaApp(tk.Tk):
         cv.bind("<Button-1>", lambda e: cmd())
         return cv
 
-    def _pantalla_nombres(self, unidad_id: str, residentes: list):
+    # Filas de residentes que caben en una pantalla vertical de 800 px junto con
+    # el encabezado, la pill y la navegación. Deptos con más residentes se paginan:
+    # sin esto, la lista se salía de la pantalla y los últimos nombres (orden
+    # alfabético) quedaban cortados e "invisibles" (caso real: Depto 302, 10 pers.).
+    RESIDENTES_POR_PAGINA = 6
+
+    def _pantalla_nombres(self, unidad_id: str, residentes: list, pagina: int = 0):
         """Paso 1c: mostrar los nombres disponibles; el repartidor elige uno."""
         self._limpiar()
         etiqueta = self.config_mgr.etiqueta_unidad
@@ -577,18 +609,47 @@ class PorteriaApp(tk.Tk):
         pill.create_text(115, 19, text=f"🏠  {etiqueta} {unidad_id}",
                          font=(FUENTE, 13, "bold"), fill=COLOR_MARCA_OSC)
 
+        # Paginación: solo se muestra la página pedida.
+        por_pag = self.RESIDENTES_POR_PAGINA
+        total_pag = max(1, -(-len(residentes) // por_pag))  # ceil
+        pagina = max(0, min(pagina, total_pag - 1))
+        visibles = residentes[pagina * por_pag:(pagina + 1) * por_pag]
+
         marco = tk.Frame(self.contenedor, bg=COLOR_FONDO)
         marco.pack(fill="both", expand=True, padx=30)
 
-        for i, residente in enumerate(residentes):
-            nombre = residente.get("nombre", "Sin nombre")
+        for i, residente in enumerate(visibles, start=pagina * por_pag):
+            nombre = self._nombre_display(residente.get("nombre", "Sin nombre"), unidad_id)
             color = COLOR_MARCA if i % 2 == 0 else COLOR_AVATAR_2
             self._fila_residente(
                 marco, nombre, f"{etiqueta} {unidad_id}", color,
                 lambda r=residente: self._seleccionar_residente(r),
             ).pack(pady=6)
 
-        self._pie_hint("Toca el nombre del destinatario")
+        # Navegación entre páginas (solo si hay más de una).
+        if total_pag > 1:
+            nav = tk.Frame(self.contenedor, bg=COLOR_FONDO)
+            nav.pack(pady=(4, 0))
+            if pagina > 0:
+                self._btn_redondo(
+                    nav, "◀  Anterior",
+                    lambda: self._pantalla_nombres(unidad_id, residentes, pagina - 1),
+                    w=150, h=48, fill="#FFFFFF", fg=COLOR_MARCA_OSC,
+                    font=(FUENTE, 14, "bold"), r=16, borde=COLOR_BORDE,
+                ).pack(side="left", padx=6)
+            tk.Label(nav, text=f"Página {pagina + 1} de {total_pag}",
+                     font=(FUENTE, 12), bg=COLOR_FONDO, fg=COLOR_TENUE).pack(side="left", padx=10)
+            if pagina < total_pag - 1:
+                self._btn_redondo(
+                    nav, "Siguiente  ▶",
+                    lambda: self._pantalla_nombres(unidad_id, residentes, pagina + 1),
+                    w=150, h=48, fill=COLOR_MARCA, fg="#FFFFFF",
+                    font=(FUENTE, 14, "bold"), r=16,
+                ).pack(side="left", padx=6)
+
+        self._pie_hint("Toca el nombre del destinatario"
+                       if total_pag == 1 else
+                       "¿No ves el nombre? Toca «Siguiente» para ver más")
 
     def _seleccionar_residente(self, residente: dict):
         """El repartidor eligió un nombre: elegir la empresa de reparto."""

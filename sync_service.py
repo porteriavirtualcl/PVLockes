@@ -90,6 +90,7 @@ class SyncService:
             self._sincronizar_couriers()
             self._empujar_pendientes()
             self._liberar_retirados_en_app()
+            self._recordar_pendientes()
             return True
         finally:
             self._ciclo_en_curso.release()
@@ -245,6 +246,60 @@ class SyncService:
         except Exception as e:  # noqa: BLE001
             logger.warning("No se pudo avisar la encomienda %s: %s",
                            enc.get("parcel_id", ""), e)
+
+    def _recordar_pendientes(self):
+        """
+        Recordatorio periódico (cada ~1 h) mientras una encomienda siga en un
+        casillero, para que el residente la retire y libere el espacio. Se envía
+        a TODOS los residentes de la unidad con app.
+
+        Solo en horario diurno (09:00–21:00 hora local del kiosco), para no
+        molestar de noche. Se repite hasta que la encomienda deje de estar
+        pendiente (la retiran). El intervalo real lo controla `last_reminder_at`
+        en la base local, así que da igual que el ciclo corra cada 60 s.
+        """
+        import datetime
+        hora = datetime.datetime.now().hour  # hora local del equipo
+        if hora < 9 or hora >= 21:
+            return
+        try:
+            pendientes = self.local.encomiendas_para_recordar(3600)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("No se pudo listar encomiendas para recordar: %s", e)
+            return
+
+        for enc in pendientes:
+            pid = enc.get("parcel_id", "")
+            unit = enc.get("unit", "")
+            locker = enc.get("locker_id", "")
+            try:
+                tokens = []
+                for r in self.local.get_residentes_por_unidad(unit):
+                    t = r.get("fcm_token")
+                    if t and t not in tokens:
+                        tokens.append(t)
+                if tokens:
+                    payload = dict(
+                        titulo="Encomienda pendiente de retiro",
+                        cuerpo=(f"Tienes una encomienda en el casillero {locker} de tu edificio. "
+                                "Retírala escaneando tu QR en el lector a un costado del locker "
+                                "y libera el espacio." if locker
+                                else "Tienes una encomienda pendiente de retiro en tu edificio."),
+                        datos={
+                            "tipo": "recordatorio_retiro",
+                            "parcelId": pid, "lockerId": locker, "condoId": self.condo_id,
+                        },
+                    )
+                    enviados = sum(1 for t in tokens if self.firebase.enviar_push(t, **payload))
+                    logger.info("Recordatorio de retiro %s: push a %s de %s residente(s).",
+                                pid, enviados, len(tokens))
+                else:
+                    logger.info("Recordatorio %s sin push: nadie de la unidad %s tiene la app.",
+                                pid, unit)
+                # Marcar SIEMPRE para respetar el intervalo de 1 h (haya o no tokens).
+                self.local.marcar_recordatorio(pid)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("No se pudo recordar la encomienda %s: %s", pid, e)
 
     # ------------------------------------------------------------------ #
     # Hilo de fondo
