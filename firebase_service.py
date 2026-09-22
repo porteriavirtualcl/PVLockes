@@ -192,6 +192,14 @@ class FirebaseService:
     # ------------------------------------------------------------------ #
     # Residentes: 'users' where role=='resident' and condoId==...
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _a_entero(valor, default: int) -> int:
+        """Coerción tolerante a int (Firestore puede traer int, float o str)."""
+        try:
+            return int(float(valor))
+        except (TypeError, ValueError):
+            return default
+
     def descargar_residentes(self, condo_id: str) -> list:
         self._asegurar_conexion()
         query = {
@@ -214,6 +222,10 @@ class FirebaseService:
                 "unit": str(d.get("unit", "")),
                 "status": d.get("status", "Activo"),
                 "fcm_token": d.get("fcmToken", ""),
+                # Orden en el listado del kiosco (menor = primero). Sin campo -> 999
+                # (al final, alfabético). Permite poner primero al destinatario
+                # habitual en deptos con muchos residentes.
+                "prioridad": self._a_entero(d.get("prioridadKiosco"), 999),
             })
         logger.info("Descargados %s residentes del condo %s.", len(residentes), condo_id)
         return residentes

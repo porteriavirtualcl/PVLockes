@@ -118,6 +118,10 @@ class LocalStore:
             cols = [r[1] for r in self._conn.execute("PRAGMA table_info(encomiendas)").fetchall()]
             if "last_reminder_at" not in cols:
                 self._conn.execute("ALTER TABLE encomiendas ADD COLUMN last_reminder_at TEXT")
+            # Migración: prioridad de orden en el listado del kiosco (menor = primero).
+            cols_res = [r[1] for r in self._conn.execute("PRAGMA table_info(residentes)").fetchall()]
+            if "prioridad" not in cols_res:
+                self._conn.execute("ALTER TABLE residentes ADD COLUMN prioridad INTEGER")
 
     # ------------------------------------------------------------------ #
     # Residentes (caché desde Firebase 'users')
@@ -141,11 +145,12 @@ class LocalStore:
             for r in residentes:
                 self._conn.execute(
                     """
-                    INSERT INTO residentes (uid, nombre, email, unit, status, fcm_token, synced_at)
-                    VALUES (:uid, :nombre, :email, :unit, :status, :fcm_token, :synced_at)
+                    INSERT INTO residentes (uid, nombre, email, unit, status, fcm_token, prioridad, synced_at)
+                    VALUES (:uid, :nombre, :email, :unit, :status, :fcm_token, :prioridad, :synced_at)
                     ON CONFLICT(uid) DO UPDATE SET
                         nombre=excluded.nombre, email=excluded.email, unit=excluded.unit,
-                        status=excluded.status, fcm_token=excluded.fcm_token, synced_at=excluded.synced_at
+                        status=excluded.status, fcm_token=excluded.fcm_token,
+                        prioridad=excluded.prioridad, synced_at=excluded.synced_at
                     """,
                     {
                         "uid": r.get("uid"),
@@ -154,6 +159,7 @@ class LocalStore:
                         "unit": str(r.get("unit", "")),
                         "status": r.get("status", "Activo"),
                         "fcm_token": r.get("fcm_token", ""),
+                        "prioridad": r.get("prioridad", 999),
                         "synced_at": ahora,
                     },
                 )
@@ -180,7 +186,7 @@ class LocalStore:
         typed = "".join(ch for ch in str(unit) if ch.isdigit())
         with self._lock:
             filas = self._conn.execute(
-                "SELECT * FROM residentes ORDER BY nombre"
+                "SELECT * FROM residentes ORDER BY COALESCE(prioridad, 999), nombre"
             ).fetchall()
         out = []
         for f in filas:
